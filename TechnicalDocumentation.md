@@ -42,13 +42,24 @@ navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
 
 清晰的数据模型是构建任何应用的基础。
 
--   **`Song`**: 一个遵循 `Hashable` 协议的结构体，用于表示列表中的歌曲。`Hashable` 是 `DiffableDataSource` 所必需的，因为它需要一种方法来唯一标识每个数据项。
+-   **`Song`**: 一个遵循 `Hashable` 协议的结构体。我们添加了 `isFavorite` 属性来跟踪歌曲的收藏状态。特别地，我们重写了 `Hashable` 的实现，**仅基于歌曲的固有属性（`name`, `artist`, `image`）生成哈希值**。这确保了当 `isFavorite` 状态改变时，`DiffableDataSource` 仍然能将它识别为同一个对象实例，从而实现平滑的移动动画，而不是删除和插入。
 
     ```swift
     struct Song: Hashable {
         let name: String
         let artist: String
         let image: String
+        var isFavorite: Bool = false
+        
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(name)
+            hasher.combine(artist)
+            hasher.combine(image)
+        }
+        
+        static func == (lhs: Song, rhs: Song) -> Bool {
+            return lhs.name == rhs.name && lhs.artist == rhs.artist && lhs.image == rhs.image
+        }
     }
     ```
 
@@ -56,6 +67,7 @@ navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
 
     ```swift
     enum Section: String, CaseIterable {
+        case favorites = "Favorites"
         case disney = "Disney"
         case pop = "Pop"
     }
@@ -67,18 +79,26 @@ navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
 
 ### 3.1. 创建 `dataSource`
 
-在 `ViewController` 中，我们创建了一个 `dataSource` 实例。`cellProvider` 闭包负责根据 `indexPath` 和数据项（`song`）返回配置好的 `UITableViewCell`。
+在 `ViewController` 中，我们创建了一个 `dataSource` 实例。`cellProvider` 闭包现在变得更加复杂，它需要根据分区类型返回三种不同的单元格。
 
 ```swift
-dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: { tableView, indexPath, song in
-    let section = Section.allCases[indexPath.section]
+dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: { [weak self] tableView, indexPath, song in
+    guard let self = self, let section = self.dataSource.sectionIdentifier(for: indexPath.section) else {
+        return UITableViewCell()
+    }
+
     switch section {
     case .disney:
-        let cell = tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath) as! SongTableViewCell
+        let cell = tableView.dequeueReusableCell(withIdentifier: SwitchableSongTableViewCell.reuseIdentifier, for: indexPath) as! SwitchableSongTableViewCell
         cell.configure(with: song)
+        cell.delegate = self
         return cell
     case .pop:
         let cell = tableView.dequeueReusableCell(withIdentifier: NewSongTableViewCell.reuseIdentifier, for: indexPath) as! NewSongTableViewCell
+        cell.configure(with: song)
+        return cell
+    case .favorites:
+        let cell = tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath) as! SongTableViewCell
         cell.configure(with: song)
         return cell
     }
@@ -91,7 +111,7 @@ dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: 
 
 ```swift
 var snapshot = NSDiffableDataSourceSnapshot<Section, Song>()
-snapshot.appendSections([.disney, .pop])
+snapshot.appendSections([.favorites, .disney, .pop])
 snapshot.appendItems(songs, toSection: .disney)
 snapshot.appendItems(popSongs, toSection: .pop)
 dataSource.apply(snapshot, animatingDifferences: false)
@@ -99,14 +119,13 @@ dataSource.apply(snapshot, animatingDifferences: false)
 
 ## 4. 自定义单元格
 
-为了展示不同的内容和样式，我们创建了两个自定义的 `UITableViewCell` 子类。
+为了展示不同的内容和样式，我们创建了三个自定义的 `UITableViewCell` 子类。
 
--   **`SongTableViewCell`**: 用于 "Disney" 分区，展示歌曲的基本信息。
+-   **`SongTableViewCell`**: 用于 "Favorites" 分区，展示歌曲的基本信息。
 -   **`NewSongTableViewCell`**: 用于 "Pop" 分区，具有不同的图标和附件样式。
+-   **`SwitchableSongTableViewCell`**: 用于 "Disney" 分区，它包含一个 `UISwitch` 开关。为了将开关的状态变化通知给 `ViewController`，我们定义了一个 `SwitchableSongTableViewCellDelegate` 协议。当开关状态改变时，单元格会调用代理方法，将自身和新的开关状态传递出去。
 
-这两个 `cell` 都在 `ViewController` 的 `viewDidLoad()` 中注册，并在 `dataSource` 的 `cellProvider` 中根据分区类型进行出列和配置。
-
-## 5. 核心功能实现
+## 5. 核心与高级功能实现
 
 ### 5.1. 拖拽重排
 
@@ -121,7 +140,10 @@ dataSource.apply(snapshot, animatingDifferences: false)
 
 ```swift
 let deleteAction = UIContextualAction(style: .destructive, title: "Delete") { [weak self] (action, view, completion) in
-    guard let self = self else { return }
+    guard let self = self, let item = self.dataSource.itemIdentifier(for: indexPath) else {
+        completion(false)
+        return
+    }
     var snapshot = self.dataSource.snapshot()
     snapshot.deleteItems([item])
     self.dataSource.apply(snapshot, animatingDifferences: true)
@@ -134,24 +156,59 @@ let deleteAction = UIContextualAction(style: .destructive, title: "Delete") { [w
 -   **添加歌曲**: `addSong()` 方法创建一个新的 `Song` 实例，将其添加到当前 `snapshot` 的 ".pop" 分区，然后应用 `snapshot` 以动画方式插入新行。
 -   **随机排序**: `shuffleSongs()` 方法获取 "Disney" 分区的所有歌曲，将它们随机排序，然后更新 `snapshot` 以反映新的顺序。
 
-### 5.4. 自定义分区页眉
+### 5.4. 自定义分区与全局页眉
 
-为了显示分区的标题，我们实现了 `UITableViewDelegate` 的 `tableView(_:viewForHeaderInSection:)` 方法。在此方法中，我们出列一个可重用的 `UITableViewHeaderFooterView`，并使用 `defaultContentConfiguration()` 来设置其文本和样式。
+-   **分区页眉**: 为了显示分区的标题，我们实现了 `UITableViewDelegate` 的 `tableView(_:viewForHeaderInSection:)` 方法。在此方法中，我们出列一个可重用的 `UITableViewHeaderFooterView`，并使用 `defaultContentConfiguration()` 来设置其文本和样式。
 
-```swift
-func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-    let headerView = tableView.dequeueReusableHeaderFooterView(withIdentifier: "header")
-    let section = dataSource.snapshot().sectionIdentifiers[section]
-    var content = headerView?.defaultContentConfiguration()
-    content?.text = section.rawValue
-    content?.textProperties.font = .boldSystemFont(ofSize: 18)
-    headerView?.contentConfiguration = content
-    return headerView
-}
-```
+-   **全局页眉**: 与分区页眉不同，我们还为整个 `UITableView` 添加了一个全局页眉。这通过在 `viewDidLoad()` 中设置 `tableView.tableHeaderView` 属性来实现。这个视图会随着列表滚动。
 
-为了让这个代理方法生效，我们必须在 `viewDidLoad()` 中设置 `tableView.delegate = self`。
+    ```swift
+    let header = UIView(frame: CGRect(x: 0, y: 0, width: view.frame.size.width, height: 100))
+    let label = UILabel(frame: header.bounds)
+    label.text = "My Awesome Playlist"
+    label.textAlignment = .center
+    label.font = .systemFont(ofSize: 24, weight: .bold)
+    header.addSubview(label)
+    tableView.tableHeaderView = header
+    ```
+
+### 5.5. 单元格驱动的数据更新：收藏夹功能
+
+这是本项目最核心的交互功能，它演示了单元格内部的 UI 事件如何驱动整个数据源的变化。
+
+1.  **遵循代理协议**: `ViewController` 遵循 `SwitchableSongTableViewCellDelegate` 协议。
+
+2.  **实现代理方法**: `ViewController` 实现了 `didChangeSwitchValue(for:isOn:)` 方法。当 `SwitchableSongTableViewCell` 中的开关状态改变时，此方法被调用。
+
+3.  **更新数据源**: 在代理方法中，我们执行以下操作：
+    *   获取被操作的 `song` 对象。
+    *   更新其 `isFavorite` 属性。
+    *   从当前的 `snapshot` 中**删除**该 `song`。
+    *   根据 `isOn` 的值，将该 `song` **添加**到 `.favorites` 或 `.disney` 分区。
+    *   应用更新后的 `snapshot`，`DiffableDataSource` 会自动计算差异并以动画形式移动单元格。
+
+    ```swift
+    func didChangeSwitchValue(for cell: SwitchableSongTableViewCell, isOn: Bool) {
+        guard let indexPath = tableView.indexPath(for: cell), var song = dataSource.itemIdentifier(for: indexPath) else {
+            return
+        }
+        
+        song.isFavorite = isOn
+        
+        var currentSnapshot = dataSource.snapshot()
+        
+        currentSnapshot.deleteItems([song])
+        
+        if isOn {
+            currentSnapshot.appendItems([song], toSection: .favorites)
+        } else {
+            currentSnapshot.appendItems([song], toSection: .disney)
+        }
+        
+        dataSource.apply(currentSnapshot, animatingDifferences: true)
+    }
+    ```
 
 ## 结论
 
-通过结合 `UITableViewDiffableDataSource`、编程方式的 UI 构建和 `UITableViewDelegate`，我们创建了一个功能强大且易于维护的列表应用。这种现代的开发方式不仅简化了代码，还提供了流畅的用户体验和优雅的动画效果。
+通过结合 `UITableViewDiffableDataSource`、编程方式的 UI 构建、`UITableViewDelegate` 以及代理模式，我们创建了一个功能强大、交互丰富且易于维护的列表应用。这种现代的开发方式不仅简化了代码，还提供了流畅的用户体验和优雅的动画效果，完美地展示了如何构建复杂的、由用户交互驱动的 UI。

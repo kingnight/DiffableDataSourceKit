@@ -9,6 +9,7 @@ import UIKit
 
 // 定義 Section 的類型，並遵從 CaseIterable 以便遍歷
 enum Section: String, CaseIterable {
+    case favorites = "Favorites"
     case disney = "Disney"
     case pop = "Pop"
 }
@@ -18,6 +19,17 @@ struct Song: Hashable {
     let name: String
     let artist: String
     let image: String
+    var isFavorite: Bool = false
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(artist)
+        hasher.combine(image)
+    }
+    
+    static func == (lhs: Song, rhs: Song) -> Bool {
+        return lhs.name == rhs.name && lhs.artist == rhs.artist && lhs.image == rhs.image
+    }
 }
 
 class ReorderableTableViewDataSource: UITableViewDiffableDataSource<Section, Song> {
@@ -106,6 +118,7 @@ class ViewController: UIViewController, UITableViewDelegate {
         // 註冊 cell 和 header
         tableView.register(SongTableViewCell.self, forCellReuseIdentifier: SongTableViewCell.reuseIdentifier)
         tableView.register(NewSongTableViewCell.self, forCellReuseIdentifier: NewSongTableViewCell.reuseIdentifier)
+        tableView.register(SwitchableSongTableViewCell.self, forCellReuseIdentifier: SwitchableSongTableViewCell.reuseIdentifier)
         tableView.register(UITableViewHeaderFooterView.self, forHeaderFooterViewReuseIdentifier: "header")
         
         // 设置 TableView 的 Header
@@ -117,25 +130,43 @@ class ViewController: UIViewController, UITableViewDelegate {
         header.addSubview(label)
         tableView.tableHeaderView = header
 
+        configureDataSource()
+        applyInitialSnapshot()
+    }
+    
+    func configureDataSource() {
         // 建立 dataSource
-        dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: { tableView, indexPath, song in
-            let section = Section.allCases[indexPath.section]
+        dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: { [weak self] tableView, indexPath, song in
+            guard let self = self else { return UITableViewCell() }
+            
+            guard let section = self.dataSource.sectionIdentifier(for: indexPath.section) else {
+                // Fallback to a default cell if section is not found
+                return tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath)
+            }
+
             switch section {
             case .disney:
-                let cell = tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath) as! SongTableViewCell
+                let cell = tableView.dequeueReusableCell(withIdentifier: SwitchableSongTableViewCell.reuseIdentifier, for: indexPath) as! SwitchableSongTableViewCell
                 cell.configure(with: song)
+                cell.delegate = self
                 return cell
             case .pop:
                 let cell = tableView.dequeueReusableCell(withIdentifier: NewSongTableViewCell.reuseIdentifier, for: indexPath) as! NewSongTableViewCell
                 cell.configure(with: song)
                 return cell
+            case .favorites:
+                let cell = tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath) as! SongTableViewCell
+                cell.configure(with: song)
+                return cell
             }
         })
-        
+    }
+    
+    func applyInitialSnapshot() {
         // 建立 snapshot
         var snapshot = NSDiffableDataSourceSnapshot<Section, Song>()
         // 加入 section
-        snapshot.appendSections([.disney, .pop])
+        snapshot.appendSections([.favorites, .disney, .pop])
         // 加入 item
         snapshot.appendItems(songs, toSection: .disney)
         snapshot.appendItems(popSongs, toSection: .pop)
@@ -190,6 +221,35 @@ class ViewController: UIViewController, UITableViewDelegate {
         }
         
         return UISwipeActionsConfiguration(actions: [deleteAction])
+    }
+}
+
+
+// MARK: - SwitchableSongTableViewCellDelegate
+extension ViewController: SwitchableSongTableViewCellDelegate {
+    func didChangeSwitchValue(for cell: SwitchableSongTableViewCell, isOn: Bool) {
+        guard let indexPath = tableView.indexPath(for: cell), var song = dataSource.itemIdentifier(for: indexPath) else {
+            return
+        }
+        
+        song.isFavorite = isOn
+        
+        var currentSnapshot = dataSource.snapshot()
+        
+        // Delete the item from its old location
+        currentSnapshot.deleteItems([song])
+        
+        // Append it to its new location
+        if isOn {
+            currentSnapshot.appendItems([song], toSection: .favorites)
+        } else {
+            currentSnapshot.appendItems([song], toSection: .disney)
+        }
+        
+        // Reconfigure the item to force the cell to be re-created using the cell provider.
+        // This ensures the correct cell type (with/without the switch) is used for the new section.
+        
+        dataSource.apply(currentSnapshot, animatingDifferences: true)
     }
 }
 
