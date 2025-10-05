@@ -209,6 +209,138 @@ let deleteAction = UIContextualAction(style: .destructive, title: "Delete") { [w
     }
     ```
 
+## 6. 抽象与封装
+
+在开发过程中，我们发现直接使用 `UITableViewDiffableDataSource` 会导致视图控制器代码臃肿，且难以复用常见操作。因此，我们设计了 `DiffableDataSourceKit` 作为一个轻量级封装，提供更简洁、更易用的 API。
+
+### 设计目标
+
+1. **简化常见操作**：提供简洁的 API 来执行添加、删除、移动等常见操作
+2. **支持可重排序**：内置对表格行重排序的支持
+3. **类型安全**：利用泛型确保类型安全
+4. **分离关注点**：将数据源操作从视图控制器中分离出来
+5. **提供调试支持**：内置可选的日志记录功能
+
+### 核心组件
+
+`DiffableDataSourceKit` 由两个主要类组成：
+
+1. **BaseReorderableDiffableDataSource**：
+   - 继承自 `UITableViewDiffableDataSource`
+   - 添加了对行重排序的支持
+   - 提供了防止跨分区移动的功能
+   - 包含可选的日志记录
+
+2. **DiffableTableAdapter**：
+   - 封装了常见的快照操作（添加、删除、移动、重新配置等）
+   - 提供了简洁的 API 来操作数据源
+   - 集中管理快照更新逻辑
+
+### 工厂模式创建数据源
+
+我们使用工厂方法模式来创建数据源，这样可以避免在初始化器中捕获 `self`：
+
+```swift
+public static func create(
+    tableView: UITableView,
+    allowCrossSectionMove: Bool = false,
+    enableLogging: Bool = false,
+    cellBuilder: @escaping (UITableView, IndexPath, Item, Section?) -> UITableViewCell
+) -> BaseReorderableDiffableDataSource<Section, Item>
+```
+
+这种方式允许 `cellBuilder` 闭包访问数据源本身，同时避免了循环引用问题。
+
+### 单元格更新策略：reload vs reconfigure
+
+在 DiffableDataSourceKit 中，我们提供了两种不同的单元格更新策略：`reload` 和 `reconfigure`。理解它们的区别对于优化列表性能和用户体验至关重要。
+
+#### reconfigure 方法
+
+`reconfigure` 方法用于更新单元格的内容，但保留现有的单元格实例。
+
+```swift
+public func reconfigure(_ item: Item, animatingDifferences: Bool = true) {
+    var snap = dataSource.snapshot()
+    snap.reconfigureItems([item])
+    dataSource.apply(snap, animatingDifferences: animatingDifferences)
+}
+```
+
+**适用场景**：
+- 仅更新单元格内容，如文本、图标等
+- 单元格高度和类型保持不变
+- 需要高性能更新，避免创建新单元格的开销
+
+**特点**：
+- 不会调用 `prepareForReuse`
+- 保留现有单元格实例
+- 性能更好，动画更流畅
+
+#### reload 方法
+
+`reload` 方法会完全销毁现有单元格并创建一个全新的单元格实例。
+
+```swift
+public func reload(_ item: Item, animatingDifferences: Bool = true) {
+    var snap = dataSource.snapshot()
+    snap.reloadItems([item])
+    dataSource.apply(snap, animatingDifferences: animatingDifferences)
+}
+```
+
+**适用场景**：
+- 单元格高度需要改变
+- 单元格类型需要改变
+- 单元格内部结构发生重大变化
+
+**特点**：
+- 会调用 `prepareForReuse`
+- 创建全新的单元格实例
+- 性能开销较大，但能处理复杂的布局变化
+
+#### 实际应用示例
+
+在 `ModernViewController` 中，我们通过 "Reload" 按钮演示了 `reload` 方法的使用：
+
+```swift
+@objc private func reloadRandomSong() {
+    // 获取当前快照中的所有歌曲
+    let snapshot = adapter.dataSource.snapshot()
+    let allSongs = snapshot.itemIdentifiers
+    
+    guard !allSongs.isEmpty else { return }
+    
+    // 随机选择一首歌曲
+    if let randomSong = allSongs.randomElement() {
+        // 1. 修改歌曲名称，添加标记以便在UI中识别
+        var updatedSong = randomSong
+        updatedSong.name = randomSong.name + " (Updated)"
+        
+        // 2. 先删除原始歌曲，然后添加更新后的歌曲
+        var newSnapshot = adapter.dataSource.snapshot()
+        newSnapshot.deleteItems([randomSong])
+        newSnapshot.appendItems([updatedSong], toSection: .disney)
+        adapter.dataSource.apply(newSnapshot, animatingDifferences: true)
+        
+        // 显示提示信息
+        let alert = UIAlertController(
+            title: "已重新加载歌曲",
+            message: "使用reload方法重新加载了'\(updatedSong.name)'。\n\n与reconfigure不同，reload会创建全新的单元格，适用于需要改变单元格高度或类型的情况。",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        present(alert, animated: true)
+    }
+}
+```
+
+**注意事项**：
+- 当使用 `reload` 方法时，如果项目的哈希值发生变化（例如修改了 `Song` 的 `name` 属性），需要先从快照中删除原始项目，然后添加更新后的项目，而不是直接调用 `adapter.reload(updatedSong)`
+- 这是因为 `reload` 方法会在快照中查找具有相同哈希值的项目，如果找不到，将导致应用崩溃
+
 ## 结论
 
 通过结合 `UITableViewDiffableDataSource`、编程方式的 UI 构建、`UITableViewDelegate` 以及代理模式，我们创建了一个功能强大、交互丰富且易于维护的列表应用。这种现代的开发方式不仅简化了代码，还提供了流畅的用户体验和优雅的动画效果，完美地展示了如何构建复杂的、由用户交互驱动的 UI。
+
+特别是通过 DiffableDataSourceKit 提供的 `reconfigure` 和 `reload` 方法，我们可以根据不同的场景选择最合适的单元格更新策略，进一步优化应用性能和用户体验。
