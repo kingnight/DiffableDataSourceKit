@@ -16,7 +16,7 @@ enum Section: String, CaseIterable {
 
 // 定義歌曲的資料結構，並遵從 Hashable
 struct Song: Hashable {
-    let name: String
+    var name: String
     let artist: String
     let image: String
     var isFavorite: Bool = false
