@@ -85,6 +85,61 @@ public final class DiffableTableAdapter<Section: Hashable, Item: Hashable> {
         self.enableLogging = enableLogging
     }
 
+    // MARK: - Cell Height (Optional)
+    /// A closure type used to provide a custom row height for a specific indexPath
+    /// - Parameters:
+    ///   - tableView: Target table view
+    ///   - indexPath: Index path for the row
+    ///   - item: Item model associated with the cell
+    ///   - section: Section identifier for the row
+    /// - Returns: A CGFloat representing the height. Return UITableView.automaticDimension if you want Auto Layout to decide.
+    public typealias HeightProvider = (UITableView, IndexPath, Item, Section?) -> CGFloat
+
+    /// A closure type used to provide a custom estimated height for better performance.
+    public typealias EstimatedHeightProvider = (UITableView, IndexPath, Item, Section?) -> CGFloat
+
+    /// Optional provider for custom row height. If nil, adapter will not compute height.
+    public var heightProvider: HeightProvider?
+
+    /// Optional provider for estimated row height. If nil, adapter will not compute estimated height.
+    public var estimatedHeightProvider: EstimatedHeightProvider?
+
+    /// Set custom height providers. Call this in your view controller and use adapter from UITableViewDelegate methods.
+    /// - Parameters:
+    ///   - height: Closure to compute actual height
+    ///   - estimated: Closure to compute estimated height (optional)
+    public func setHeightProviders(height: HeightProvider?, estimated: EstimatedHeightProvider? = nil) {
+        self.heightProvider = height
+        self.estimatedHeightProvider = estimated
+        if enableLogging { print("[Adapter] setHeightProviders height set: \(height != nil), estimated set: \(estimated != nil)") }
+    }
+
+    /// Convenience method to enable Auto Layout driven row heights on the table view.
+    /// - Parameter estimatedRowHeight: A reasonable estimate to help table view performance.
+    public func enableAutomaticDimension(estimatedRowHeight: CGFloat = 60) {
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = estimatedRowHeight
+        if enableLogging { print("[Adapter] enableAutomaticDimension with estimatedRowHeight: \(estimatedRowHeight)") }
+    }
+
+    /// Compute a custom height for a given indexPath using the provided heightProvider.
+    /// - Returns: Height if provider exists and item can be resolved; otherwise nil.
+    public func heightForRow(at indexPath: IndexPath) -> CGFloat? {
+        guard let provider = heightProvider else { return nil }
+        guard let item = dataSource.itemIdentifier(for: indexPath) else { return nil }
+        let section = dataSource.sectionIdentifier(for: indexPath.section)
+        return provider(tableView, indexPath, item, section)
+    }
+
+    /// Compute a custom estimated height for a given indexPath using the provided estimatedHeightProvider.
+    /// - Returns: Estimated height if provider exists and item can be resolved; otherwise nil.
+    public func estimatedHeightForRow(at indexPath: IndexPath) -> CGFloat? {
+        guard let provider = estimatedHeightProvider else { return nil }
+        guard let item = dataSource.itemIdentifier(for: indexPath) else { return nil }
+        let section = dataSource.sectionIdentifier(for: indexPath.section)
+        return provider(tableView, indexPath, item, section)
+    }
+
     // MARK: - Setup
     /// Apply initial sections and items mapping.
     /// - Parameters:

@@ -16,6 +16,17 @@ class ModernViewController: UIViewController, UITableViewDelegate {
     // MARK: - UI Components
     let tableView = UITableView(frame: .zero, style: .grouped)
     
+    // MARK: - Height Mode
+    /// 控制行高模式：自动高度（Auto Layout）或闭包高度（固定/自定义逻辑）
+    private enum HeightMode { case automatic, closure }
+    private var heightMode: HeightMode = .automatic
+    private lazy var heightModeControl: UISegmentedControl = {
+        let sc = UISegmentedControl(items: ["Auto", "Closure"])
+        sc.selectedSegmentIndex = 0
+        sc.addTarget(self, action: #selector(onHeightModeChanged(_:)), for: .valueChanged)
+        return sc
+    }()
+    
     // MARK: - Data
     // 复用与 ViewController 相同的 Section 和 Song 模型
     let disneySongs = [
@@ -39,6 +50,10 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         
         setupUI()
         configureDataSource()
+        
+        // 默认开启自动高度模式
+        configureHeightMode(.automatic)
+        
         setupInitialData()
     }
     
@@ -50,6 +65,9 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         let reloadButton = UIBarButtonItem(title: "Reload", style: .plain, target: self, action: #selector(reloadRandomSong))
         navigationItem.rightBarButtonItems = [UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addSong)), reloadButton]
         navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
+        
+        // 在标题处加入高度模式切换
+        navigationItem.titleView = heightModeControl
         
         // 设置表格视图
         view.addSubview(tableView)
@@ -68,6 +86,8 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         tableView.register(NewSongTableViewCell.self, forCellReuseIdentifier: NewSongTableViewCell.reuseIdentifier)
         tableView.register(SwitchableSongTableViewCell.self, forCellReuseIdentifier: SwitchableSongTableViewCell.reuseIdentifier)
         tableView.register(UITableViewHeaderFooterView.self, forHeaderFooterViewReuseIdentifier: "header")
+        // 新增完全自定义的卡片样式 cell
+        tableView.register(CustomSongCardCell.self, forCellReuseIdentifier: CustomSongCardCell.reuseIdentifier)
         
         // 设置表格头部视图
         let header = UIView(frame: CGRect(x: 0, y: 0, width: view.frame.size.width, height: 100))
@@ -102,7 +122,8 @@ class ModernViewController: UIViewController, UITableViewDelegate {
                 cell.configure(with: song)
                 return cell
             case .favorites:
-                let cell = tableView.dequeueReusableCell(withIdentifier: SongTableViewCell.reuseIdentifier, for: indexPath) as! SongTableViewCell
+                // 使用全新 CustomSongCardCell 演示高度控制
+                let cell = tableView.dequeueReusableCell(withIdentifier: CustomSongCardCell.reuseIdentifier, for: indexPath) as! CustomSongCardCell
                 cell.configure(with: song)
                 return cell
             default:
@@ -112,6 +133,80 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         
         // 创建适配器以简化快照操作
         adapter = DiffableTableAdapter(tableView: tableView, dataSource: dataSource, enableLogging: true)
+    }
+    
+    // MARK: - Height Mode Configuration
+    /// 配置高度模式，并设置对应的表格属性与闭包
+    private func configureHeightMode(_ mode: HeightMode) {
+        heightMode = mode
+        switch mode {
+        case .automatic:
+            // 由 Auto Layout 计算高度（需要单元格有完整的垂直约束）
+            adapter.enableAutomaticDimension(estimatedRowHeight: 80)
+            adapter.setHeightProviders(height: nil, estimated: nil)
+            if adapter.enableLogging { print("[ModernVC] Height mode -> automatic") }
+        case .closure:
+            // 使用闭包提供固定/动态高度（更可控）
+            tableView.rowHeight = 60
+            tableView.estimatedRowHeight = 60
+            adapter.setHeightProviders(height: { [weak self] tableView, indexPath, song, section in
+                guard let section = section else { return 60 }
+                switch section {
+                case .favorites:
+                    // 对卡片 cell 使用自定义首选高度逻辑
+                    return CustomSongCardCell.preferredHeight(for: song)
+                case .disney:
+                    return 60
+                case .pop:
+                    return 72
+                default:
+                    return 60
+                }
+            }, estimated: { tableView, indexPath, song, section in
+                // 估算高度与实际高度保持一致或给出略小的值以提升性能
+                guard let section = section else { return 60 }
+                switch section {
+                case .favorites:
+                    return CustomSongCardCell.defaultHeight
+                case .disney:
+                    return 60
+                case .pop:
+                    return 72
+                default:
+                    return 60
+                }
+            })
+            if adapter.enableLogging { print("[ModernVC] Height mode -> closure") }
+        }
+        // 刷新以应用高度变化
+        tableView.reloadData()
+    }
+    
+    /// SegmentedControl 切换事件
+    @objc private func onHeightModeChanged(_ sender: UISegmentedControl) {
+        let mode: HeightMode = sender.selectedSegmentIndex == 0 ? .automatic : .closure
+        configureHeightMode(mode)
+    }
+    
+    // MARK: - UITableViewDelegate (Height)
+    /// 返回行高：根据当前高度模式选择 automaticDimension 或闭包提供的值
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        switch heightMode {
+        case .automatic:
+            return UITableView.automaticDimension
+        case .closure:
+            return adapter.heightForRow(at: indexPath) ?? tableView.rowHeight
+        }
+    }
+    
+    /// 返回预估行高：有助于提升滚动性能
+    func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+        switch heightMode {
+        case .automatic:
+            return tableView.estimatedRowHeight > 0 ? tableView.estimatedRowHeight : 80
+        case .closure:
+            return adapter.estimatedHeightForRow(at: indexPath) ?? tableView.estimatedRowHeight
+        }
     }
     
     // MARK: - Initial Data Setup
