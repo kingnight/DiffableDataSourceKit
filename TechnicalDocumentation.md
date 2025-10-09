@@ -344,3 +344,93 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 通过结合 `UITableViewDiffableDataSource`、编程方式的 UI 构建、`UITableViewDelegate` 以及代理模式，我们创建了一个功能强大、交互丰富且易于维护的列表应用。这种现代的开发方式不仅简化了代码，还提供了流畅的用户体验和优雅的动画效果，完美地展示了如何构建复杂的、由用户交互驱动的 UI。
 
 特别是通过 DiffableDataSourceKit 提供的 `reconfigure` 和 `reload` 方法，我们可以根据不同的场景选择最合适的单元格更新策略，进一步优化应用性能和用户体验。
+
+
+
+# 示例
+
+### 示例一：自动高度（automaticDimension）下，文本长度变化导致多行，需要重新计算高度
+
+场景：你在自动高度模式下（adapter.enableAutomaticDimension），修改了 cell 内 label 的文本，让其从一行变成多行，例如 subtitle 变长。
+
+用 Diffable 的 reload 让表格重新创建该行：
+
+- 只要该项的“身份”不变（Song 的 Hashable 等同性由 name/artist/image 决定，isFavorite 不参与身份），可以直接调用：
+  - adapter.reload(updatedSong)
+- 如果你只更新了 isFavorite 或其它不会影响身份的字段，此方法可直接生效，UITableView 会重新计算自动高度。
+
+注意：如果你改变了 name/artist/image（即身份变更），reload(updatedSong)无法找到原条目。这时需要“删除旧 + 追加新”，参考示例三。
+
+
+
+### 示例二：闭包高度模式下，内容变化让 heightProvider 计算出的高度不同
+
+场景：你在闭包模式中通过 heightProvider 返回不同高度，例如根据 isFavorite 或标题长度决定高度。修改该属性后，需要让高度闭包重新被调用。
+
+做法：
+- 更新模型（保持身份不变，例如只改 isFavorite）
+- 调用 adapter.reload(updatedSong) 或 adapter.reload([updatedSong1, updatedSong2])，让 cell 重新创建并触发新的高度计算
+
+示例思路（伪代码）：
+- 在 configureHeightMode(.closure) 时设置：
+  - adapter.setHeightProviders(height: { tv, indexPath, item, section in
+    if section == .favorites {
+    // 例如：收藏的歌曲给更高的卡片
+    return CustomSongCardCell.defaultHeight
+    } else {
+    // 非收藏根据标题长度粗略决定高度
+    return item.name.count > 20 ? 80 : 60
+    }
+    }, estimated: { _, _, _, _ in 72 })
+- 当用户在某个交互中改变 item.name 或 isFavorite（不改变身份的字段）后：
+  
+  adapter.reload(item) 以便立即反映高度变化
+  
+  
+  
+### 示例三：内容变化导致“身份变更”（例如修改 name），必须“删除旧 + 追加新”来更新高度
+
+场景：你把 Song.name 改成不同的文本。根据当前 Hashable 等同性，name/artist/image 共同决定身份；改了 name 就是“新条目”。这时:
+- 不能用 adapter.reconfigure 或 adapter.reload(updatedSong)（因为身份找不到原条目）
+- 应当使用“删除旧 + 追加新”的方式更新快照
+
+做法（ModernViewController 中我已经写了一个类似示例的按钮）：
+- 取当前快照 snapshot
+- newSnapshot.deleteItems([oldSong])
+- newSnapshot.appendItems([updatedSong], toSection: .disney) // 或原分区
+- adapter.dataSource.apply(newSnapshot, animatingDifferences: true)
+
+此方式会创建全新的 cell，触发自动或闭包高度重新计算，适用于需要改变高度或类型的情况
+
+### 示例四：reconfigure 仅用于内容更新，但高度和类型不变
+
+场景：只更新 cell 文本或图片，但高度不会变化（例如短文本替换短文本、图标换色），类型也不变。
+
+做法：
+- adapter.reconfigure(item) 或 adapter.reconfigure([item1, item2])
+
+说明：
+
+reconfigure 不会触发高度重新计算（保持现有 cell 实例），性能较好
+
+
+
+### 快速总结如何选用方法
+
+- 跨分区移动（身份不变）：deleteItems + appendItems + apply（不要再对同一条目 reload）。
+- 身份变化（Hash 值变）：必须 deleteItems + appendItems + apply，reload/reconfigure 无法定位旧条目。
+- 同分区且仅内容变化：
+  - 高度/类型不变：reconfigureItems + apply
+  - 高度或类型变化：reloadItems + apply
+
+- 对“同一个条目（同一身份）在同一次快照中”，应只选择一种操作路径，不要把 delete+append 和 reconfigure/reload 混在一起使用。也就是只能下面三类情况之一：
+  1. deleteItems + appendItems + apply（用于跨分区移动或身份变化）
+  1. reconfigureItems + apply（用于仅内容变化、且高度/类型不变）
+  1. reloadItems + apply（用于内容变化导致高度或类型需要重建）
+
+- 不过，在“同一份快照里针对不同的条目”，可以同时存在不同操作。比如：A 条目跨分区移动（delete+append），B 条目仅内容更新（reconfigure），C 条目高度变化（reload），最后统一一次 apply。这是合法且常见的批处理方式。关键是“同一条目”不要混用两种标记。
+
+为什么不建议对同一条目组合“delete+append + reconfigure/reload”：
+
+- delete+append 已经意味着“旧 cell 被移除，新 cell 会被创建”，再对同一条目做 reconfigure 或 reload 是冗余的，甚至可能产生不确定的动画效果或重复刷新。
+- 选择路径的依据是“目标是什么”：如果你要移动或替换（身份变），用 delete+append；如果只是刷新内容不变高，用 reconfigure；如果要触发高度/类型重建，用 reload。

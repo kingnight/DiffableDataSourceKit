@@ -186,16 +186,6 @@ public final class DiffableTableAdapter<Section: Hashable, Item: Hashable> {
         dataSource.apply(snap, animatingDifferences: animatingDifferences)
     }
 
-    /// Shuffle the order of items inside a section.
-    public func shuffle(section: Section, animatingDifferences: Bool = true) {
-        var snap = dataSource.snapshot()
-        let items = snap.itemIdentifiers(inSection: section)
-        snap.deleteItems(items)
-        snap.appendItems(items.shuffled(), toSection: section)
-        if enableLogging { print("[Adapter] shuffle section: \(section)") }
-        dataSource.apply(snap, animatingDifferences: animatingDifferences)
-    }
-
     /// Reconfigure a single item (forces the cell provider to be re-run for that item).
     /// - Note: 使用此方法更新现有单元格的数据内容，但保留现有单元格实例。不会调用 prepareForReuse。
     /// - Important: 仅当数据内容变化但单元格高度不变时使用此方法。如需改变单元格高度或类型，请使用 reload 方法。

@@ -61,10 +61,9 @@ class ModernViewController: UIViewController, UITableViewDelegate {
     private func setupUI() {
         // 设置导航栏
         title = "Modern Playlist"
-        let shuffleButton = UIBarButtonItem(title: "Shuffle", style: .plain, target: self, action: #selector(shuffleSongs))
-        let reloadButton = UIBarButtonItem(title: "Reload", style: .plain, target: self, action: #selector(reloadRandomSong))
-        navigationItem.rightBarButtonItems = [UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addSong)), reloadButton]
-        navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
+        let demosButton = UIBarButtonItem(title: "Heights", style: .plain, target: self, action: #selector(presentHeightDemos))
+        navigationItem.rightBarButtonItems = [UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addSong)), demosButton]
+        navigationItem.leftBarButtonItems = [editButtonItem]
         
         // 在标题处加入高度模式切换
         navigationItem.titleView = heightModeControl
@@ -159,8 +158,6 @@ class ModernViewController: UIViewController, UITableViewDelegate {
                     return 60
                 case .pop:
                     return 72
-                default:
-                    return 60
                 }
             }, estimated: { tableView, indexPath, song, section in
                 // 估算高度与实际高度保持一致或给出略小的值以提升性能
@@ -172,8 +169,6 @@ class ModernViewController: UIViewController, UITableViewDelegate {
                     return 60
                 case .pop:
                     return 72
-                default:
-                    return 60
                 }
             })
             if adapter.enableLogging { print("[ModernVC] Height mode -> closure") }
@@ -235,41 +230,149 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         adapter.append(newSong, to: .pop, animatingDifferences: true)
     }
     
-    @objc private func shuffleSongs() {
-        // 使用适配器的便捷方法随机排序歌曲
-        adapter.shuffle(section: .disney, animatingDifferences: true)
+    // MARK: - Height Change Demos
+    /// 展示四种高度更新场景的菜单
+    @objc private func presentHeightDemos() {
+        let ac = UIAlertController(title: "Height Update Demos", message: "选择一种场景进行演示", preferredStyle: .actionSheet)
+        ac.addAction(UIAlertAction(title: "自动高度：内容变更触发高度变化", style: .default, handler: { _ in
+            self.demoAutomaticHeightContentChange()
+        }))
+        ac.addAction(UIAlertAction(title: "闭包高度：内容变更导致闭包高度不同", style: .default, handler: { _ in
+            self.demoClosureHeightChange()
+        }))
+        ac.addAction(UIAlertAction(title: "身份变更：删除旧项+追加新项", style: .default, handler: { _ in
+            self.demoIdentityChange()
+        }))
+        ac.addAction(UIAlertAction(title: "仅内容变更：reconfigure（高度不变）", style: .default, handler: { _ in
+            self.demoReconfigureNoHeightChange()
+        }))
+        ac.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(ac, animated: true)
     }
     
-    /// 重新加载随机歌曲 - 演示reload方法的使用场景
-    /// 当单元格需要完全重新创建（例如高度变化）时，应使用reload而非reconfigure
-    @objc private func reloadRandomSong() {
-        // 获取当前快照中的所有歌曲
-        let snapshot = adapter.dataSource.snapshot()
-        let allSongs = snapshot.itemIdentifiers
-        
-        guard !allSongs.isEmpty else { return }
-        
-        // 随机选择一首歌曲
-        if let randomSong = allSongs.randomElement() {
-            // 1. 修改歌曲名称，添加标记以便在UI中识别
-            var updatedSong = randomSong
-            updatedSong.name = randomSong.name + " (Updated)"
-            
-            // 2. 先删除原始歌曲，然后添加更新后的歌曲
-            var newSnapshot = adapter.dataSource.snapshot()
-            newSnapshot.deleteItems([randomSong])
-            newSnapshot.appendItems([updatedSong], toSection: .disney)
-            adapter.dataSource.apply(newSnapshot, animatingDifferences: true)
-            
-            // 显示提示信息
-            let alert = UIAlertController(
-                title: "已重新加载歌曲",
-                message: "使用reload方法重新加载了'\(updatedSong.name)'。\n\n与reconfigure不同，reload会创建全新的单元格，适用于需要改变单元格高度或类型的情况。",
-                preferredStyle: .alert
-            )
+    /// 场景1：自动高度模式下，内容变更导致高度变化（例如 favorites 卡片 subtitle 变长）
+    /// 示例中需要两次操作才能更新高度，详见注释
+    private func demoAutomaticHeightContentChange() {
+        guard heightMode == .automatic else {
+            let alert = UIAlertController(title: "请切换到自动高度模式", message: "当前为闭包高度模式，AutomaticDimension 更适合该演示。", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "确定", style: .default))
             present(alert, animated: true)
+            return
         }
+        var snap = adapter.dataSource.snapshot()
+        let favorites = snap.itemIdentifiers(inSection: .favorites)
+        if favorites.isEmpty {
+            // 若没有收藏，则从 Disney 拿第一首并加入到 favorites，同时设置 isFavorite=true
+            if let first = snap.itemIdentifiers(inSection: .disney).first {
+                var updated = first
+                updated.isFavorite = true
+                snap.deleteItems([first])
+                snap.appendItems([updated], toSection: .favorites)
+                //在自动高度模式里，插入/移动行时，UITableView会先用“预估高度”做动画，通常不会在同一次批处理里再做一次自动布局的二次测量以避免高度“跳变”。因此你在“删除旧 + 追加新”（跨分区移动）后，新建的 Favorites 区 cell会以 estimatedRowHeight 的值完成插入动画，很多情况下不会立即反映更长的多行文本带来的真实高度。这个时候页面看起来就像“只移动了分区，没变高度”。
+                if adapter.enableLogging { print("[Demo] Automatic: moved one item to favorites with isFavorite=true; now reload to ensure height recalculation") }
+                adapter.dataSource.apply(snap, animatingDifferences: true)
+
+                let alert = UIAlertController(title: "已更新内容以触发自动高度", message: "已将 Disney 的第一首歌曲移至 Favorites 并丰富其副标题，行高已在本次操作中变化。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "好的", style: .default))
+                present(alert, animated: true)
+            } else {
+                let alert = UIAlertController(title: "无可演示的歌曲", message: "请先添加或移动歌曲到 Favorites。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "确定", style: .default))
+                present(alert, animated: true)
+            }
+            return
+        }
+        // 取第一项，使其 isFavorite=true，以便 CustomSongCardCell 展示更丰富的内容（多行）
+        var item = favorites[0]
+        item.isFavorite = true
+        
+        // 根据文档最佳实践，当身份不变时，使用 reload 来更新内容并触发高度重新计算
+        if adapter.enableLogging { print("[Demo] Automatic: reloading item to trigger height recalculation.") }
+        //此处调用reload才会更新高度
+        adapter.reload([item])
+
+        let alert = UIAlertController(title: "已更新内容以触发自动高度", message: "Favorites 中第一项内容已加长，Auto Layout 自动计算行高。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好的", style: .default))
+        present(alert, animated: true)
+    }
+    
+    /// 场景2：闭包高度模式下，内容变更导致高度变化
+    private func demoClosureHeightChange() {
+        guard heightMode == .closure else {
+            let alert = UIAlertController(title: "请切换到闭包高度模式", message: "当前为自动高度模式，闭包高度更适合该演示。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "确定", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        var snap = adapter.dataSource.snapshot()
+        let favorites = snap.itemIdentifiers(inSection: .favorites)
+        if favorites.isEmpty {
+            // 若没有收藏，则从 Pop 拿第一首加入到 favorites
+            if let first = snap.itemIdentifiers(inSection: .pop).first {
+                var updated = first
+                updated.isFavorite = true
+                snap.deleteItems([first])
+                snap.appendItems([updated], toSection: .favorites)
+                adapter.dataSource.apply(snap, animatingDifferences: true)
+                if adapter.enableLogging { print("[Demo] Closure: moved one item to favorites with isFavorite=true") }
+            } else {
+                let alert = UIAlertController(title: "无可演示的歌曲", message: "请先添加或移动歌曲到 Favorites。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "确定", style: .default))
+                present(alert, animated: true)
+            }
+            return
+        }
+        // 切换 isFavorite 以影响 CustomSongCardCell.preferredHeight(for:)
+        var item = favorites[0]
+        item.isFavorite.toggle()
+        //Song 是一个 struct 且实现了 Hashable；根据项目文档，身份（哈希等同性）由 name/artist/image 决定，isFavorite 不参与身份。此时仅改变 isFavorite 并不需要“删除旧 + 追加新”，直接 reload 即可让闭包高度重新计算。
+        // 使用 reload 使闭包高度重新计算
+        adapter.reload(item, animatingDifferences: true)
+        let alert = UIAlertController(title: "已更新内容以触发闭包高度", message: "根据 isFavorite 的变化，preferredHeight 返回了不同的高度。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好的", style: .default))
+        present(alert, animated: true)
+    }
+    
+    /// 场景3：身份变更（修改 name 等），需删除旧项并追加新项到同一分区
+    private func demoIdentityChange() {
+        var snap = adapter.dataSource.snapshot()
+        let disney = snap.itemIdentifiers(inSection: .disney)
+        guard let target = disney.first else {
+            let alert = UIAlertController(title: "无可演示的歌曲", message: "Disney 分区为空。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "确定", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        var updated = target
+        updated.name = target.name + " (v2)"
+        snap.deleteItems([target])
+        snap.appendItems([updated], toSection: .disney)
+        adapter.dataSource.apply(snap, animatingDifferences: true)
+        if adapter.enableLogging { print("[Demo] Identity change: replaced item with new name -> triggers new cell & height recompute if needed") }
+        let alert = UIAlertController(title: "已进行身份变更", message: "通过删除旧项并追加新项的方式替换了 Disney 中第一首歌。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好的", style: .default))
+        present(alert, animated: true)
+    }
+    
+    /// 场景4：仅内容变更但高度与类型不变，使用 reconfigure 提高性能
+    private func demoReconfigureNoHeightChange() {
+        // 选取 Pop 分区第一项，修改非身份字段（isFavorite），并使用 reconfigure
+        let snap = adapter.dataSource.snapshot()
+        let pop = snap.itemIdentifiers(inSection: .pop)
+        guard var target = pop.first else {
+            let alert = UIAlertController(title: "无可演示的歌曲", message: "Pop 分区为空。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "确定", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        // 仅更新不会影响身份的字段，保证高度与类型不变
+        target.isFavorite.toggle()
+        // 直接使用 reconfigure：保留现有 cell 实例，仅更新内容（不改变高度/类型）
+        adapter.reconfigure(target, animatingDifferences: true)
+        if adapter.enableLogging { print("[Demo] Reconfigure: updated content without changing height/type for Pop item") }
+        let alert = UIAlertController(title: "已进行内容更新（reconfigure）", message: "Pop 第一项仅更新内容，不改变高度和类型。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好的", style: .default))
+        present(alert, animated: true)
     }
     
     // MARK: - UITableViewDelegate
