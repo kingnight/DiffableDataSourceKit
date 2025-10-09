@@ -85,6 +85,7 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         dataSource = BaseReorderableDiffableDataSource.create(
             tableView: tableView,
             allowCrossSectionMove: false,
+            allowReordering: true,
             enableLogging: true
         ) { [weak self] tableView, indexPath, song, section in
             guard let self = self else { return UITableViewCell() }

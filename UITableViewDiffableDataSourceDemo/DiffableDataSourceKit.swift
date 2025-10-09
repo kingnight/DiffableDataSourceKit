@@ -15,6 +15,7 @@ public final class BaseReorderableDiffableDataSource<Section: Hashable, Item: Ha
     // MARK: - Configuration
     public var allowCrossSectionMove: Bool = false
     public var enableLogging: Bool = false
+    public var allowReordering: Bool = true
 
     // MARK: - Factory
     /// Create a data source with a section-aware cell builder.
@@ -22,12 +23,14 @@ public final class BaseReorderableDiffableDataSource<Section: Hashable, Item: Ha
     /// - Parameters:
     ///   - tableView: Target table view
     ///   - allowCrossSectionMove: Whether reordering can move rows across sections (default: false)
+    ///   - allowReordering: Whether reordering is enabled (default: false)
     ///   - enableLogging: Enable debug print logs
     ///   - cellBuilder: A builder closure that receives tableView, indexPath, item, and section (if available)
     /// - Returns: Configured BaseReorderableDiffableDataSource
     public static func create(
         tableView: UITableView,
         allowCrossSectionMove: Bool = false,
+        allowReordering: Bool = false,
         enableLogging: Bool = false,
         cellBuilder: @escaping (UITableView, IndexPath, Item, Section?) -> UITableViewCell
     ) -> BaseReorderableDiffableDataSource<Section, Item> {
@@ -37,14 +40,16 @@ public final class BaseReorderableDiffableDataSource<Section: Hashable, Item: Ha
             return cellBuilder(tableView, indexPath, item, section)
         }
         ds.allowCrossSectionMove = allowCrossSectionMove
+        ds.allowReordering = allowReordering
         ds.enableLogging = enableLogging
         return ds
     }
 
     // MARK: - Reordering
+    /// 控制是否允许行重排。返回值由 allowReordering 属性决定，便于通过工厂方法进行统一配置。
     public override func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
-        if enableLogging { print("[BaseReorderable] canMoveRowAt: \(indexPath)") }
-        return true
+        if enableLogging { print("[BaseReorderable] canMoveRowAt: \(indexPath) -> allowed: \(allowReordering)") }
+        return allowReordering
     }
 
     public override func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
