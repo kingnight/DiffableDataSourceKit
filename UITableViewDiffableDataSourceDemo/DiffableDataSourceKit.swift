@@ -3,7 +3,7 @@
 // A lightweight, reusable abstraction over UITableViewDiffableDataSource to adapt different models, sections, and cell types.
 // This file provides:
 // 1) A generic, reorderable data source subclass that prevents cross-section moves and centralizes logging
-// 2) A simple adapter to perform common snapshot operations (add/delete/move/shuffle/reconfigure)
+// 2) A simple adapter to perform common snapshot operations (add/delete/move/reload/reconfigure)
 
 import UIKit
 
