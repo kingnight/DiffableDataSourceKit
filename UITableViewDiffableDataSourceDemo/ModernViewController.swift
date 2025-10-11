@@ -240,7 +240,7 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         ac.addAction(UIAlertAction(title: "闭包高度：内容变更导致闭包高度不同", style: .default, handler: { _ in
             self.demoClosureHeightChange()
         }))
-        ac.addAction(UIAlertAction(title: "身份变更：删除旧项+追加新项", style: .default, handler: { _ in
+        ac.addAction(UIAlertAction(title: "模型哈希值变更：删除旧项+追加新项", style: .default, handler: { _ in
             self.demoIdentityChange()
         }))
         ac.addAction(UIAlertAction(title: "仅内容变更：reconfigure（高度不变）", style: .default, handler: { _ in
@@ -333,7 +333,7 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         present(alert, animated: true)
     }
     
-    /// 场景3：身份变更（修改 name 等），需删除旧项并追加新项到同一分区
+    /// 场景3：模型哈希值变更（修改 name 等），需删除旧项并追加新项到同一分区
     private func demoIdentityChange() {
         var snap = adapter.dataSource.snapshot()
         let disney = snap.itemIdentifiers(inSection: .disney)
@@ -349,7 +349,7 @@ class ModernViewController: UIViewController, UITableViewDelegate {
         snap.appendItems([updated], toSection: .disney)
         adapter.dataSource.apply(snap, animatingDifferences: true)
         if adapter.enableLogging { print("[Demo] Identity change: replaced item with new name -> triggers new cell & height recompute if needed") }
-        let alert = UIAlertController(title: "已进行身份变更", message: "通过删除旧项并追加新项的方式替换了 Disney 中第一首歌。", preferredStyle: .alert)
+        let alert = UIAlertController(title: "已进行模型哈希值变更", message: "通过删除旧项并追加新项的方式替换了 Disney 中第一首歌。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "好的", style: .default))
         present(alert, animated: true)
     }

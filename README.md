@@ -359,7 +359,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
   - adapter.reload(updatedSong)
 - 如果你只更新了 isFavorite 或其它不会影响身份的字段，此方法可直接生效，UITableView 会重新计算自动高度。
 
-注意：如果你改变了 name/artist/image（即身份变更），reload(updatedSong)无法找到原条目。这时需要“删除旧 + 追加新”，参考示例三。
+注意：如果你改变了 name/artist/image（即模型哈希值变更），reload(updatedSong)无法找到原条目。这时需要“删除旧 + 追加新”，参考示例三。
 
 
 
@@ -388,7 +388,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
   
   
   
-### 示例三：内容变化导致“身份变更”（例如修改 name），必须“删除旧 + 追加新”来更新高度
+### 示例三：内容变化导致“模型哈希值变更”（例如修改 name），必须“删除旧 + 追加新”来更新高度
 
 场景：你把 Song.name 改成不同的文本。根据当前 Hashable 等同性，name/artist/image 共同决定身份；改了 name 就是“新条目”。这时:
 - 不能用 adapter.reconfigure 或 adapter.reload(updatedSong)（因为身份找不到原条目）

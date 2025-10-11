@@ -136,7 +136,7 @@ enum Section: String, CaseIterable {
 // 文件: UITableViewDiffableDataSourceDemo/ModernViewController.swift
 
 // 1. 声明 dataSource 变量
-var dataSource: BaseReorderableDiffableDataSource<Section, Song>!
+var dataSource: UITableViewDiffableDataSource<Section, Song>!
 
 // 2. 在 viewDidLoad 中初始化
 override func viewDidLoad() {
@@ -148,7 +148,7 @@ override func viewDidLoad() {
 
 // 3. 配置 dataSource
 private func configureDataSource() {
-    dataSource = BaseReorderableDiffableDataSource(tableView: tableView) { 
+    dataSource = UITableViewDiffableDataSource(tableView: tableView) { 
         tableView, indexPath, song -> UITableViewCell? in
         
         // 根据分区和数据返回不同类型的 cell
@@ -419,7 +419,41 @@ where SectionIdentifierType: Hashable, ItemIdentifierType: Hashable {
 
 #### 在 `ViewController` 中启用
 
-由于我们的 `ModernViewController` 使用了 `BaseReorderableDiffableDataSource`，拖拽功能几乎是“开箱即用”的。我们只需要在 `viewDidLoad` 中开启 `UITableView` 的编辑模式即可。
+为了利用我们刚刚在 `BaseReorderableDiffableDataSource` 中定义的拖拽功能，我们需要更新 `ModernViewController`。之前，我们为了基础设置使用了标准的 `UITableViewDiffableDataSource`。现在，是时候将它替换为我们的子类了。
+
+**第一步：更新 `dataSource` 的类型和实例化**
+
+回到 `ModernViewController.swift`，找到 `dataSource` 的声明和 `configureDataSource` 方法，并进行如下修改：
+
+```swift
+// 文件: ModernViewController.swift
+
+// 1. 将类型从 UITableViewDiffableDataSource 更改为我们的子类
+var dataSource: BaseReorderableDiffableDataSource<Section, Song>!
+
+// ...
+
+private func configureDataSource() {
+    // 2. 使用 BaseReorderableDiffableDataSource 进行实例化
+    dataSource = BaseReorderableDiffableDataSource(tableView: tableView) { 
+        tableView, indexPath, song -> UITableViewCell? in
+        // ... cell provider 的实现保持不变 ...
+        // 暂时返回一个基础 cell
+        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+        var content = cell.defaultContentConfiguration()
+        content.text = song.name
+        content.secondaryText = song.artist
+        cell.contentConfiguration = content
+        return cell
+    }
+}
+```
+
+通过这个简单的更改，我们的 `dataSource` 现在就具备了处理拖拽移动的能力。
+
+**第二步：开启编辑模式**
+
+接下来，在 `viewDidLoad` 中添加一个编辑按钮来开启 `UITableView` 的编辑模式。
 
 ```swift
 // 文件: ModernViewController.swift
@@ -428,7 +462,7 @@ override func viewDidLoad() {
     super.viewDidLoad()
     // ...
     // 添加编辑按钮到导航栏
-    navigationItem.leftBarButtonItems = [..., editButtonItem]
+    navigationItem.leftBarButtonItem = editButtonItem
 }
 
 // `editButtonItem` 会自动触发 setEditing(_:animated:)
@@ -503,28 +537,32 @@ func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRow
 
 `DiffableDataSource` 的真正威力不仅在于它简化了基本的数据展示，更在于它处理动态更新的方式。要构建高性能和响应迅速的用户界面，对它的更新机制有细致的理解至关重要。本部分将超越基础知识，探讨 `DiffableDataSource` 所支持的架构模式和高级策略，重点关注 `DiffableDataSourceKit` 提供的抽象。
 
-### 1. 高级更新策略：`reload` vs. `reconfigure` vs. 身份变更
+### 1. 高级更新策略：`reload` vs. `reconfigure` vs. 模型哈希值变更
 
-当一个项目的数据发生变化时，你应该如何通知 `DiffableDataSource`？你有三种主要工具可供选择：`reloadItems`、`reconfigureItems` 和手动的“身份变更”（删除 + 追加）。选择正确的工具取决于性能和意图。
+当一个项目的数据发生变化时，你应该如何通知 `DiffableDataSource`？你有三种主要工具可供选择：`reloadItems`、`reconfigureItems` 和手动的“模型哈希值变更”（删除 + 追加）。选择正确的工具取决于性能和意图。
 
 #### 传统方式：`reloadItems(_:)`
 
 这是更新单元格的传统方法。当你调用 `reloadItems` 时，你是在告诉数据源，该项目的数据已经发生了根本性的变化，以至于现有的单元格不再有效。
 
 **它做了什么：**
+
 1.  销毁现有的 `UITableViewCell` 实例。
 2.  在旧单元格上调用 `prepareForReuse()`。
 3.  通过重新运行 `cellProvider` 创建一个全新的单元格。
 4.  将新单元格动画地放入位置。
 
 **何时使用：**
-*   当单元格的**高度或基本结构发生变化时**。例如，如果更新一个项目导致它从紧凑布局切换到扩展布局。
-*   当底层数据变化非常大，以至于重新创建单元格比尝试更新其各个子视图更简单时。
+
+*   当数据变更**导致单元格的高度或布局结构需要重新计算时**。例如，一个项目的文本内容从单行变为多行，需要动态调整单元格高度。
+*   当单元格的状态变化需要完全不同的 UI 布局时。例如，从一个紧凑的摘要视图切换到一个包含图表的扩展视图。
+
+与 `reconfigureItems` 相比，`reloadItems` 是一个更重的操作，因为它会销毁并重新创建 `UITableViewCell` 实例。因此，仅在 `reconfigureItems` 无法满足 UI 更新需求时才应使用它。
 
 在我们的 `DiffableTableAdapter` 中，这被公开为 `reload(_:)`。
 
 ```swift
-// 在 DiffableTableAdapter.swift 中
+// 在 DiffableDataSourceKit.swift 中
 public func reload(_ item: Item, animatingDifferences: Bool = true) {
     var snap = dataSource.snapshot()
     snap.reloadItems([item])
@@ -537,6 +575,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 `reconfigureItems` 是在 iOS 15 中引入的，它在性能上是一个游戏规则的改变者。它认识到，通常只有单元格的*内容*发生变化，而不是它的整个身份或结构。
 
 **它做了什么：**
+
 1.  **保留现有的 `UITableViewCell` 实例。**
 2.  为该项目重新运行 `cellProvider`。
 3.  将新的配置应用到*同一个*单元格。
@@ -544,6 +583,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 5.  执行一个微妙的、通常难以察觉的交叉淡入淡出动画。
 
 **何时使用：**
+
 *   对于**不影响单元格高度或布局**的频繁、微小的数据更新。
 *   典型的例子是切换“收藏”状态，如 `ModernViewController` 中所示。星星图标会改变，但单元格的尺寸和结构保持不变。
 
@@ -569,24 +609,25 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 
 这种方法比完全 `reload` 要快得多，因为它避免了销毁和重新分配单元格的昂贵过程。它带来了更平滑、无闪烁的用户体验。
 
-#### 最终选择：身份变更（删除 + 追加）
+### 2. 手动操作快照：`delete` + `append`
 
-当一个项目的身份发生如此巨大的变化，以至于应被视为一个完全不同的实体时，会发生什么？这就是 `Hashable` 一致性变得至关重要的地方。如果你改变了项目 `hashValue` 或 `==` 实现中的一部分属性，`DiffableDataSource` 将会视其为一个新项目。
+在 `reload` 和 `reconfigure` 无法满足需求时，我们可以通过直接操作快照来实现更复杂的 UI 更新。最常见的组合是 `delete` 和 `append`。这个模式为你提供了对数据布局的完全控制。
 
-例如，在我们的 `Song` 模型中，`id` 是其身份的核心。如果你要改变 `id`，你就不能使用 `reload` 或 `reconfigure`。数据源将无法再找到“旧”项目。
+**核心操作流程：**
+1.  从当前快照中 `delete` 一个或多个项目。
+2.  在同一个快照中 `append` 一个或多个项目（可以指定新的分区）。
+3.  将修改后的快照 `apply` 到数据源。
 
-在这种情况下，或者当你需要在一个分区之间移动一个项目时，你需要执行手动的身份变更。
+这个模式主要适用于以下两种截然不同的场景：
 
-**它做了什么：**
-1.  你明确地从快照中 `delete` 旧项目。
-2.  你在同一个快照中明确地 `append` 新项目（可能到另一个分区）。
-3.  你 `apply` 快照。
+#### 场景一：跨分区移动项目
 
-**何时使用：**
-*   **在分区之间移动项目。** 这是最常见的用例。例如，当用户将一首歌标记为“收藏”，并且你希望将其从 `.pop` 分区移动到 `.favorites` 分区时。
-*   当一个项目的基本身份（`Hashable` 身份）发生变化时。
+当你想把一个项目从一个分区移动到另一个分区，而项目本身的身份（哈希值）保持不变时，这是最理想的方法。
 
-我们的 `DiffableTableAdapter` 为此场景提供了一个方便的 `move` 方法：
+*   **何时使用：** 用户执行了一个操作，需要将项目重新分类。例如，将一首歌从“播放列表”分区移动到“已收藏”分区。
+*   **关键点：** 被移动的项目在 `delete` 和 `append` 操作中是同一个实例，其哈希值没有改变。
+
+我们的 `DiffableTableAdapter` 为此场景提供了一个方便的 `move` 方法。在单个快照中进行原子性的删除和追加操作，使得 `DiffableDataSource` 能够理解这两个操作之间的关系，并产生一个平滑的动画，将项目从旧位置移动到新位置。
 
 ```swift
 // 在 DiffableTableAdapter.swift 中
@@ -598,50 +639,84 @@ public func move(_ item: Item, to section: Section, animatingDifferences: Bool =
 }
 ```
 
-在单个快照中进行原子性的删除和追加操作，使得 `DiffableDataSource` 能够理解这两个操作之间的关系，并产生一个平滑的动画，将项目从旧位置移动到新位置。
+#### 场景二：模型哈希值变更
 
-### 2. 架构思考：从数据源到视图适配器
+当一个项目的核心身份（由其 `Hashable` 实现决定）发生改变时，`DiffableDataSource` 会视其为一个全新的项目。在这种情况下，`reload` 或 `reconfigure` 会因为找不到旧项目而失败。
 
-这个项目中的 `DiffableDataSourceKit.swift` 文件不仅仅是一个辅助工具的集合；它是一个深思熟虑的架构选择。它引入了**适配器模式**，以将 `ViewController` 从 `UITableViewDiffableDataSource` 的直接管理中解耦出来。
+*   **何时使用：** 你修改了模型中参与哈希计算的属性。例如，在我们的 `Song` 模型中，修改了 `name`、`artist` 或 `image`。
+*   **关键点：** `oldSong` 和 `updatedSong` 是两个不同的实例，它们的哈希值不同。你必须先删除旧的，再添加新的。
 
-`DiffableTableAdapter` 类是这个模式的核心。让我们分析一下它的设计和好处。
+### 3. 架构思考：从数据源到视图适配器
 
-#### 适配器的角色
+虽然 `UITableViewDiffableDataSource` 极大地简化了 `UITableView` 的数据管理，但它本身只是一个“数据引擎”。在复杂的真实世界应用中，直接在 `ViewController` 中使用它会很快导致代码臃肿和责任不清。`DiffableDataSourceKit.swift` 的设计哲学，正是为了解决这一问题，它通过两个核心组件——`BaseReorderableDiffableDataSource` 和 `DiffableTableAdapter`——构建了一个更强大、更优雅的架构。
 
-`DiffableTableAdapter` 充当一个中介。它持有对 `UITableView` 和 `dataSource` 的引用，并为 `ViewController` 提供一个简化的、高级的 API。
+#### 核心组件一：`BaseReorderableDiffableDataSource` —— 安全地增强，而非粗暴地替换
+
+直接使用 `UITableViewDiffableDataSource` 会遇到一些棘手的问题：
+1.  **重排（Reordering）的复杂性**：实现拖拽重排需要重写 `tableView(_:moveRowAt:to:)` 方法，这涉及到手动操作快照，逻辑很容易出错，尤其是在处理分区移动时。
+2.  **上下文缺失**：`cellProvider` 闭包在初始化时只能访问 `(UITableView, IndexPath,Item)`，它对所在的 `Section` 一无所知，这在需要根据分区类型来配置单元格时非常不便。
+3.  **循环引用风险**：为了在 `cellProvider` 之外访问数据源（例如，获取分区信息），开发者很容易在闭包中捕获 `self`，从而引发循环引用。
+
+`BaseReorderableDiffableDataSource` 通过精巧的子类化和工厂模式解决了这些问题：
+
+*   **内置重排逻辑**：它重写了 `canMoveRowAt` 和 `moveRowAt`，将复杂的快照操作封装起来，并提供 `allowCrossSectionMove` 选项来控制行为，极大地简化了重排功能的实现。
+*   **静态工厂方法与上下文注入**：`create` 工厂方法是设计的核心。它避免了在 `init` 方法中直接使用 `cellProvider`，而是通过一个局部变量 `ds` 来打破循环引用的链条。更重要的是，它重新定义了一个更强大的 `cellBuilder`，该闭包拥有 `(UITableView, IndexPath,Item,Section?)` 四个参数。通过在内部的 `cellProvider` 中查询 `ds.sectionIdentifier(for:)`，它巧妙地将 `Section` 上下文注入到了单元格的构建过程中。
 
 ```swift
-// 在 DiffableTableAdapter.swift 中
-public final class DiffableTableAdapter<Section: Hashable, Item: Hashable> {
-    public let tableView: UITableView
-    public let dataSource: BaseReorderableDiffableDataSource<Section, Item>
-    
-    // ... 简化的方法，如 applyInitialSnapshot, append, delete, move, reconfigure ...
+// 在 BaseReorderableDiffableDataSource.swift 中
+public static func create(
+    // ...
+    cellBuilder: @escaping (UITableView, IndexPath, Item, Section?) -> UITableViewCell
+) -> BaseReorderableDiffableDataSource<Section, Item> {
+    var ds: BaseReorderableDiffableDataSource<Section, Item>! // 1. 声明一个弱引用变量
+    ds = BaseReorderableDiffableDataSource<Section, Item>(tableView: tableView) { tableView, indexPath, item in
+        // 3. 在闭包内部，ds 已经被捕获，但此时它是一个已初始化的对象
+        let section = ds.sectionIdentifier(for: indexPath.section) // 4. 注入 Section 上下文
+        return cellBuilder(tableView, indexPath, item, section)
+    }
+    // 2. 完成初始化，ds 被赋值
+    return ds
 }
 ```
 
-`ViewController` 不再需要直接构建 `snapshot` 对象并调用 `dataSource.apply()`，而是可以使用更具表现力的方法：
+这种设计体现了“增强而非替换”的原则。它没有重新发明轮子，而是在 Apple 提供的基础上，通过安全的扩展来弥补其原生设计的不足。
+
+#### 核心组件二：`DiffableTableAdapter` —— 统一数据操作与视图布局
+
+`ViewController` 的职责应该是协调数据和视图，而不是陷入快照操作和 `UITableViewDelegate` 的实现细节中。`DiffableTableAdapter` 正是为此而生，它扮演了一个关键的“视图适配器”角色，将数据操作和视图布局的逻辑从 `ViewController` 中彻底解耦。
+
+*   **统一的数据操作API**：适配器将所有快照操作（如 `append`, `delete`, `move`, `reconfigure`）封装成简单、表意清晰的方法。`ViewController` 只需调用 `adapter.move(song, to: .favorites)`，而无需关心背后复杂的 `snapshot` 构建和应用过程。这使得 `ViewController` 的代码更加简洁、可读，并专注于业务逻辑。
+
+*   **解耦 `UITableViewDelegate`**：`UITableViewDelegate` 中的方法，如 `heightForRowAt`，通常需要访问模型数据来动态计算高度。传统做法是在 `ViewController` 中实现这些代理方法，这破坏了封装性。`DiffableTableAdapter` 通过提供 `heightProvider` 和 `estimatedHeightProvider` 闭包，将高度计算的逻辑也纳入了适配器的管理范畴。
 
 ```swift
-// 在 ModernViewController.swift 中 - 更清晰！
-adapter.append(newSong, to: .pop)
-adapter.move(song, to: .favorites)
-adapter.reconfigure(updatedSong)
+// 在 ModernViewController.swift 中
+adapter.setHeightProviders(
+    height: { tableView, indexPath, item, section in
+        // 根据 item 和 section 计算并返回高度
+        return 120
+    }
+)
+
+// 在 UITableViewDelegate 回调中
+func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+    return adapter.heightForRow(at: indexPath) ?? UITableView.automaticDimension
+}
 ```
 
-#### 适配器模式的好处
+通过这种方式，`DiffableTableAdapter` 成为了 `UITableView` 数据和布局的唯一“真理之源”。它不仅管理着 `dataSource` 的快照，还负责提供单元格的高度信息，从而实现了数据层和视图表现层的完美统一。
 
-1.  **关注点分离 (SoC)**：`ViewController` 的主要工作是处理用户交互和业务逻辑。它不应该被创建和操作快照的细节所困扰。适配器将这些细节抽象出来，从而极大地清理了 `ViewController`。
+#### 架构优势总结
 
-2.  **提高可读性**：`adapter.move(song, to: .favorites)` 比手动创建快照、删除项目、在别处追加项目并应用结果的代码块更具可读性和意图揭示性。
+`DiffableDataSourceKit` 的架构设计带来了多重好处：
 
-3.  **增强可重用性**：`DiffableTableAdapter` 是完全通用的。你可以将它放入任何项目中，并与任何符合 `Hashable` 的 `Section` 和 `Item` 类型一起重用。这促进了 DRY（不要重复自己）的方法。
+1.  **极致的关注点分离 (SoC)**：`ViewController` 负责“做什么”（业务逻辑），`DiffableTableAdapter` 负责“如何做”（数据操作与布局），而 `BaseReorderableDiffableDataSource` 则专注于解决数据源本身的技术难题。各司其职，代码结构清晰。
 
-4.  **集中式逻辑**：所有快照操作逻辑现在都在一个地方。如果你需要围绕快照应用添加自定义日志、错误处理或性能优化，你只需要在适配器中进行，而不需要在每个 `ViewController` 中进行。
+2.  **高度的可重用性与可测试性**：`DiffableTableAdapter` 和 `BaseReorderableDiffableDataSource` 都是完全通用的泛型类，可以轻松地在任何项目中使用。同时，由于逻辑被集中和简化，它们也变得非常容易进行单元测试。
 
-5.  **提高可测试性**：因为适配器的方法简单、专注，并且不依赖于 `ViewController` 的状态，所以它们更容易进行单元测试。你可以创建一个模拟的 `dataSource`，并验证调用 `adapter.append()` 是否会导致正确的快照操作。
+3.  **提升开发效率与代码质量**：通过提供一套高级、易用的 API，该架构极大地减少了样板代码，让开发者能够更专注于实现功能，而不是处理底层的复杂性。
 
-通过将 `DiffableDataSource` 从 `ViewController` 中的一个简单属性提升为由专用适配器管理的组件，我们正在朝着更健壮、可扩展和可维护的架构迈进。这是编写专业级 iOS 应用程序的关键一步。
+总而言之，`DiffableDataSourceKit` 不仅仅是一个简单的工具集，它体现了一种先进的架构思想：**通过分层和抽象，将复杂性封装在专门的组件中，从而为上层提供一个简洁、强大且安全的接口。** 这是从“能用”的代码迈向“专业级”代码的关键一步。
 
 ## 结论：拥抱 `UITableView` 的未来
 
