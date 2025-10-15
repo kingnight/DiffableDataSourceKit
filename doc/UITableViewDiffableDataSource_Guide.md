@@ -23,7 +23,7 @@
 
 为了完全掌控 UI 的创建和布局，我们将抛弃 Storyboard，采用纯代码的方式来构建界面。这种方式不仅能让我们更清晰地理解视图层级，也更便于团队协作和代码维护。
 
-#### 1.1. 移除 Storyboard
+#### 移除 Storyboard
 
 首先，我们需要告诉项目，不再使用默认的 `Main.storyboard` 文件来启动应用。这需要两步操作：
 
@@ -533,15 +533,40 @@ func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRow
 
 ---
 
-## 第三部分：高级技术与重构
+## 第三部分：高级交互与动态内容
+
+### 3.1. 核心理念：数据源与代理的职责分离
+
+在深入探讨动态行高和更复杂的交互之前，我们必须先澄清一个核心的设计理念：`UITableViewDiffableDataSource` 与 `UITableViewDelegate` 之间的关系。
+
+很多初学者可能会感到困惑：既然有了 `DiffableDataSource`，为什么我们还需要 `Delegate`？它们一起使用是否意味着“混合”了新旧两种模式？
+
+答案是：**这不是混合，而是各司其职的协作**。这恰恰是 Apple 推荐的最佳实践，完美体现了“关注点分离”（Separation of Concerns）的设计原则。
+
+我们可以用一个简单的比喻来理解：
+
+*   **`UITableViewDiffableDataSource` 是你的“库存清单”**：它的唯一职责是管理**数据状态**。它告诉你书架上（`UITableView`）应该有哪些书（`Item`）、这些书分成了哪些类别（`Section`），以及它们的顺序。它关心的是“**什么**”被展示。
+*   **`UITableViewDelegate` 是你的“展厅设计师”**：它的职责是管理**视图的外观和交互**。它决定了每个书架隔层应该有多高（`heightForRowAt`）、书本被点击时会发生什么（`didSelectRowAt`）、是否可以对某本书进行操作（`contextMenuConfigurationForRowAt`）等。它关心的是“**如何**”展示以及“**如何**”与用户互动。
+
+`DiffableDataSource` 的出现，是**为了取代 `UITableViewDataSource`**，而不是 `UITableViewDelegate`。它将数据源的管理从一系列分散的代理方法（如 `numberOfRowsInSection`, `cellForRowAt` 等）中解放出来，变成一个统一的、声明式的 `snapshot` 管理机制。这使得数据状态的管理变得前所未有的健壮和简单。
+
+而 `UITableViewDelegate` 的角色始终如一：处理所有与视图渲染和用户交互相关的逻辑。
+
+因此，当你在 `ModernViewController` 中同时看到 `dataSource.apply(snapshot)` 和 `tableView(_:heightForRowAt:)` 时，你应该认识到这是一个优雅的协作：
+1.  `dataSource` 通过 `snapshot` 确定了**要显示哪些歌曲**。
+2.  `delegate` 通过 `heightForRowAt` 告诉 `UITableView` **这些歌曲的单元格应该有多高**。
+
+两者目标一致，但职责清晰，共同构建了现代、高效且易于维护的 `UITableView`。
+
+### 3.2. 动态行高：自适应内容的艺术
 
 `DiffableDataSource` 的真正威力不仅在于它简化了基本的数据展示，更在于它处理动态更新的方式。要构建高性能和响应迅速的用户界面，对它的更新机制有细致的理解至关重要。本部分将超越基础知识，探讨 `DiffableDataSource` 所支持的架构模式和高级策略，重点关注 `DiffableDataSourceKit` 提供的抽象。
 
-### 1. 高级更新策略：`reload` vs. `reconfigure` vs. 模型哈希值变更
+#### 1. 高级更新策略：`reload` vs. `reconfigure` vs. 模型哈希值变更
 
 当一个项目的数据发生变化时，你应该如何通知 `DiffableDataSource`？你有三种主要工具可供选择：`reloadItems`、`reconfigureItems` 和手动的“模型哈希值变更”（删除 + 追加）。选择正确的工具取决于性能和意图。
 
-#### 传统方式：`reloadItems(_:)`
+##### 传统方式：`reloadItems(_:)`
 
 这是更新单元格的传统方法。当你调用 `reloadItems` 时，你是在告诉数据源，该项目的数据已经发生了根本性的变化，以至于现有的单元格不再有效。
 
@@ -570,7 +595,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 }
 ```
 
-#### 现代高性能选择：`reconfigureItems(_:)`
+##### 现代高性能选择：`reconfigureItems(_:)`
 
 `reconfigureItems` 是在 iOS 15 中引入的，它在性能上是一个游戏规则的改变者。它认识到，通常只有单元格的*内容*发生变化，而不是它的整个身份或结构。
 
@@ -609,18 +634,19 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 
 这种方法比完全 `reload` 要快得多，因为它避免了销毁和重新分配单元格的昂贵过程。它带来了更平滑、无闪烁的用户体验。
 
-### 2. 手动操作快照：`delete` + `append`
+#### 2. 手动操作快照：`delete` + `append`
 
 在 `reload` 和 `reconfigure` 无法满足需求时，我们可以通过直接操作快照来实现更复杂的 UI 更新。最常见的组合是 `delete` 和 `append`。这个模式为你提供了对数据布局的完全控制。
 
 **核心操作流程：**
+
 1.  从当前快照中 `delete` 一个或多个项目。
 2.  在同一个快照中 `append` 一个或多个项目（可以指定新的分区）。
 3.  将修改后的快照 `apply` 到数据源。
 
 这个模式主要适用于以下两种截然不同的场景：
 
-#### 场景一：跨分区移动项目
+##### 场景一：跨分区移动项目
 
 当你想把一个项目从一个分区移动到另一个分区，而项目本身的身份（哈希值）保持不变时，这是最理想的方法。
 
@@ -639,14 +665,14 @@ public func move(_ item: Item, to section: Section, animatingDifferences: Bool =
 }
 ```
 
-#### 场景二：模型哈希值变更
+##### 场景二：模型哈希值变更
 
 当一个项目的核心身份（由其 `Hashable` 实现决定）发生改变时，`DiffableDataSource` 会视其为一个全新的项目。在这种情况下，`reload` 或 `reconfigure` 会因为找不到旧项目而失败。
 
 *   **何时使用：** 你修改了模型中参与哈希计算的属性。例如，在我们的 `Song` 模型中，修改了 `name`、`artist` 或 `image`。
 *   **关键点：** `oldSong` 和 `updatedSong` 是两个不同的实例，它们的哈希值不同。你必须先删除旧的，再添加新的。
 
-### 3. 架构思考：从数据源到视图适配器
+### 3.3 架构思考：从数据源到视图适配器
 
 虽然 `UITableViewDiffableDataSource` 极大地简化了 `UITableView` 的数据管理，但它本身只是一个“数据引擎”。在复杂的真实世界应用中，直接在 `ViewController` 中使用它会很快导致代码臃肿和责任不清。`DiffableDataSourceKit.swift` 的设计哲学，正是为了解决这一问题，它通过两个核心组件——`BaseReorderableDiffableDataSource` 和 `DiffableTableAdapter`——构建了一个更强大、更优雅的架构。
 

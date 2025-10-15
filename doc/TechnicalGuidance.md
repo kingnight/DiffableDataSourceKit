@@ -77,7 +77,23 @@ navigationItem.leftBarButtonItems = [shuffleButton, editButtonItem]
 
 `UITableViewDiffableDataSource` 是现代 `UITableView` 开发的核心，它简化了数据更新和动画。
 
-### 3.1. 创建 `dataSource`
+### 3.1. 核心理念：数据源与代理的职责分离
+
+在深入代码之前，理解 `DiffableDataSource` 与 `UITableViewDelegate` 之间的关系至关重要。许多开发者初次接触时可能会疑惑：为什么有了现代化的 `DiffableDataSource`，我们仍然需要使用传统的 `Delegate` 来处理行高等事务？
+
+答案在于**职责分离 (Separation of Concerns)**。这两者并非“混用”，而是“协同工作”的关系：
+
+-   **`UITableViewDiffableDataSource` (数据管理者)**: 它的核心职责是**管理数据状态**。它只关心“列表应该显示**什么**数据？”。它通过 `snapshot` 机制，将过去手动、易错的数据更新操作（如 `insertRows`, `deleteRows`）转变为安全、声明式的状态管理。**它本质上是 `UITableViewDataSource` 协议的现代化替代品。**
+
+-   **`UITableViewDelegate` (视图行为与交互设计师)**: 它的职责保持不变，专注于处理**视图的表现和用户的交互**。它关心的是“视图应该**怎么样**呈现？”以及“用户操作时会**发生什么**？”。这包括：
+    -   行高 (`tableView(_:heightForRowAt:)`)
+    -   区头/区尾视图 (`tableView(_:viewForHeaderInSection:)`)
+    -   单元格点击事件 (`tableView(_:didSelectRowAt:)`)
+    -   滑动操作等交互行为
+
+简单来说，`DiffableDataSource` 负责**数据模型**，而 `Delegate` 负责**视图布局与交互**。这种清晰的分工是构建可维护、可扩展 iOS 应用的基石。
+
+### 3.2. 创建 `dataSource`
 
 在 `ViewController` 中，我们创建了一个 `dataSource` 实例。`cellProvider` 闭包现在变得更加复杂，它需要根据分区类型返回三种不同的单元格。
 
@@ -105,7 +121,7 @@ dataSource = ReorderableTableViewDataSource(tableView: tableView, cellProvider: 
 })
 ```
 
-### 3.2. 使用 `snapshot` 更新 UI
+### 3.3. 使用 `snapshot` 更新 UI
 
 所有对 `UITableView` 的数据更新都是通过创建和应用 `NSDiffableDataSourceSnapshot` 来完成的。这确保了 UI 和数据源始终保持同步，并自动处理了复杂的动画。
 
