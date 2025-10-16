@@ -535,7 +535,7 @@ func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRow
 
 ## 第三部分：高级交互与动态内容
 
-### 3.1. 核心理念：数据源与代理的职责分离
+### 1. 核心理念：数据源与代理的职责分离
 
 在深入探讨动态行高和更复杂的交互之前，我们必须先澄清一个核心的设计理念：`UITableViewDiffableDataSource` 与 `UITableViewDelegate` 之间的关系。
 
@@ -558,11 +558,11 @@ func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRow
 
 两者目标一致，但职责清晰，共同构建了现代、高效且易于维护的 `UITableView`。
 
-### 3.2. 动态行高：自适应内容的艺术
+### 2. 动态行高：自适应内容的艺术
 
 `DiffableDataSource` 的真正威力不仅在于它简化了基本的数据展示，更在于它处理动态更新的方式。要构建高性能和响应迅速的用户界面，对它的更新机制有细致的理解至关重要。本部分将超越基础知识，探讨 `DiffableDataSource` 所支持的架构模式和高级策略，重点关注 `DiffableDataSourceKit` 提供的抽象。
 
-#### 1. 高级更新策略：`reload` vs. `reconfigure` vs. 模型哈希值变更
+#### 高级更新策略：`reload` vs. `reconfigure` vs. 模型哈希值变更
 
 当一个项目的数据发生变化时，你应该如何通知 `DiffableDataSource`？你有三种主要工具可供选择：`reloadItems`、`reconfigureItems` 和手动的“模型哈希值变更”（删除 + 追加）。选择正确的工具取决于性能和意图。
 
@@ -634,7 +634,7 @@ public func reload(_ item: Item, animatingDifferences: Bool = true) {
 
 这种方法比完全 `reload` 要快得多，因为它避免了销毁和重新分配单元格的昂贵过程。它带来了更平滑、无闪烁的用户体验。
 
-#### 2. 手动操作快照：`delete` + `append`
+#### 手动操作快照：`delete` + `append`
 
 在 `reload` 和 `reconfigure` 无法满足需求时，我们可以通过直接操作快照来实现更复杂的 UI 更新。最常见的组合是 `delete` 和 `append`。这个模式为你提供了对数据布局的完全控制。
 
@@ -672,7 +672,51 @@ public func move(_ item: Item, to section: Section, animatingDifferences: Bool =
 *   **何时使用：** 你修改了模型中参与哈希计算的属性。例如，在我们的 `Song` 模型中，修改了 `name`、`artist` 或 `image`。
 *   **关键点：** `oldSong` 和 `updatedSong` 是两个不同的实例，它们的哈希值不同。你必须先删除旧的，再添加新的。
 
-### 3.3 架构思考：从数据源到视图适配器
+#### 底层逻辑探索
+
+**这里提出一个问题：当模型哈希值变更的情况下，即执行`delete` + `append`后，UITableViewCell会被重新创建吗？ 这个操作与执行realod的底层逻辑一致吗？**
+
+#####  `delete` + `append` 会重新创建 `UITableViewCell` 吗？
+
+**答案是：是的。**
+
+当一个模型的哈希值发生改变时，`DiffableDataSource` 会将这个“更新后”的项目视为一个**全新的、完全不同**的实体。从数据源的角度来看，旧的项目已经消失了，一个新的项目出现了。
+
+因此，当你应用一个包含 `deleteItems([oldItem])` 和 `appendItems([newItem])` 的快照（snapshot）时，`DiffableDataSource` 会指示 `UITableView` 执行两个独立的操作：
+1.  为对应 `oldItem` 的那一行执行**删除**动画。
+2.  为对应 `newItem` 的那一行执行**插入**动画。
+
+这个**插入**操作**总是**会触发 `cellProvider` 闭包，为这个新项目创建一个全新的 `UITableViewCell` 实例。所以，最终的结果确实是在屏幕上出现了一个新的单元格。
+
+##### 其底层逻辑与 `reloadItems` 一致吗？
+
+**答案是：不，底层逻辑是不同的，尽管它们最终的视觉效果（一个新创建的 cell）是相同的。**
+
+让我们来比较一下这两者：
+
+| 特性                          | `delete` + `append` (因哈希值变更)                           | `reloadItems` (因内容变更)                                   |
+| :---------------------------- | :----------------------------------------------------------- | :----------------------------------------------------------- |
+| **核心概念**                  | **身份变更**。旧项目消失，一个新项目取而代之。               | **内容变更**。项目还是同一个，但它的展现方式需要一次彻底的重置。 |
+| **`DiffableDataSource` 行为** | 它看到了两个不同的哈希值。它计算出的差异（diff）包含一次删除和一次插入。 | 它在新旧快照中找到了一个**哈希值相同**的项目，并将其标记为需要“重新加载 (reload)”。 |
+| **`UITableView` 操作**        | 对应于 `tableView.deleteRows(at:)` 和 `tableView.insertRows(at:)`。 | 对应于 `tableView.reloadRows(at:)`。                         |
+| **动画效果**                  | 通常是旧的淡出，新的淡入，或者如果位置也变了，会是更复杂的移动动画。 | 在原地进行一次交叉溶解（cross-dissolve）的淡入淡出动画。     |
+| **使用场景**                  | 项目的身份（由其 `Hashable` 实现决定）改变了。此时若用 `reloadItems` 会导致崩溃，因为它在旧数据中找不到“新”项目的哈希值。 | 项目的身份没变，但发生了重大变化（例如需要改变行高）。       |
+
+##### 一个比喻
+
+想象一下你有一个带编号的停车位：
+
+*   **`reloadItems`**：同一辆车还在那个车位，但它刚刚换了个新颜色。你告诉停车场管理员：“请重新检查一下 5 号车位的车”。管理员看着同一辆车，更新了它的描述。
+*   **`delete` + `append`**：原来在 5 号车位的车开走了，一辆完全不同的车停了进来。你告诉管理员：“5 号车位的车走了。现在，一辆新车停在了 5 号车位”。管理员需要处理一次离场和一次新入场。
+
+##### 总结
+
+ `delete` + `append`与`reloadItems` 它们都是强制 `UITableViewCell` 被完全重建的策略。但是，它们并不能互换使用。如何选择取决于一条简单的规则：
+
+*   如果项目的 **`Hashable` 身份发生了改变**，你**必须**使用 `delete` + `append`。
+*   如果项目的 **`Hashable` 身份保持不变**，但你需要强制进行一次完整的 cell 重建（例如为了改变行高），你应该使用 `reloadItems`。
+
+### 3. 架构思考：从数据源到视图适配器
 
 虽然 `UITableViewDiffableDataSource` 极大地简化了 `UITableView` 的数据管理，但它本身只是一个“数据引擎”。在复杂的真实世界应用中，直接在 `ViewController` 中使用它会很快导致代码臃肿和责任不清。`DiffableDataSourceKit.swift` 的设计哲学，正是为了解决这一问题，它通过两个核心组件——`BaseReorderableDiffableDataSource` 和 `DiffableTableAdapter`——构建了一个更强大、更优雅的架构。
 
